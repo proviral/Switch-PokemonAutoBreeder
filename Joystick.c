@@ -27,8 +27,6 @@ these buttons for our use.
 #include "Joystick.h"
 #include "instructions.h"
 
-extern const uint8_t image_data[0x12c1] PROGMEM;
-
 // Main entry point.
 int main(void) {
 	// We'll start by performing hardware and peripheral setup.
@@ -139,7 +137,7 @@ void HID_Task(void) {
 	}
 }
 
-void reset_report(USB_JoystickReport_Input_t* const ReportData) {
+void reset_data(USB_JoystickReport_Input_t* const ReportData) {
 	memset(ReportData, 0, sizeof(USB_JoystickReport_Input_t));
 	ReportData->LX = STICK_CENTER;
 	ReportData->LY = STICK_CENTER;
@@ -151,39 +149,28 @@ void reset_report(USB_JoystickReport_Input_t* const ReportData) {
 void take_action(action_t action, USB_JoystickReport_Input_t* const ReportData) {
 	switch (action)
 	{
-		case get_off_bike:
-		case get_on_bike:
-		case press_plus:
-			ReportData->Button |= SWITCH_PLUS;
-			break;
-		
-		case turn_left:
-			ReportData->RX = STICK_MIN;
-			break;
-		
-		case turn_right:
-			ReportData->RX = STICK_MAX;
-			break;
-		
-		case move_forward:
+		case press_up:
 			ReportData->LY = STICK_MIN;
 			break;
-		case move_backward:
+
+		case press_down:
 			ReportData->LY = STICK_MAX;
 			break;
-		
-		case move_left:
+
+		case press_left:
 			ReportData->LX = STICK_MIN;
 			break;
 
-		case move_right:
+		case press_right:
 			ReportData->LX = STICK_MAX;
 			break;
-		
-		case open_menu:
-		case close_menu:
-		case press_x:
-			ReportData->Button |= SWITCH_X;
+
+		case press_plus:
+			ReportData->Button |= SWITCH_PLUS;
+			break;
+
+		case press_minus:
+			ReportData->Button |= SWITCH_MINUS;
 			break;
 
 		case press_a:
@@ -194,74 +181,86 @@ void take_action(action_t action, USB_JoystickReport_Input_t* const ReportData) 
 			ReportData->Button |= SWITCH_B;
 			break;
 
+		case press_x:
+			ReportData->Button |= SWITCH_X;
+			break;
+
 		case press_y:
 			ReportData->Button |= SWITCH_Y;
 			break;
 
-		case reset_view_angle:
+		case press_r:
+			ReportData->Button |= SWITCH_R;
+			break;
+
+		case press_l:
 			ReportData->Button |= SWITCH_L;
 			break;
-		
-		case circle_around:
-			ReportData->LX = STICK_MAX;
-			ReportData->RX = STICK_MAX;
+
+		case press_zr:
+			ReportData->Button |= SWITCH_ZR;
+			break;
+
+		case press_zl:
+			ReportData->Button |= SWITCH_ZL;
+			break;
+
+		case press_home:
+			ReportData->Button |= SWITCH_HOME;
+			break;
+
+		case press_capture:
+			ReportData->Button |= SWITCH_CAPTURE;
 			break;
 
 		case hang:
-			reset_report(ReportData);
+			reset_data(ReportData);
 			break;
 
 		default:
-			reset_report(ReportData);
+			reset_data(ReportData);
 			break;
 	}
 }
 
-
 typedef enum {
 	SYNC_CONTROLLER,
-	FLY_TO_NURSERY,
-	APPROACH_NPC,
-	PICK_SWAP_SLOT,
-	SWAP_POKEMON,
-	BREEDING_PREP,
-	BREEDING,
 	BREATHE,
-	NEXT_ROUND,
+	PROCESS,
+	REPEAT,
+	CLEANUP,
 	DONE
 } State_t;
 
-State_t state = SYNC_CONTROLLER;
+State_t current_state = SYNC_CONTROLLER;
 
 #define ECHOES 2
 int echoes = 0;
 USB_JoystickReport_Input_t last_report;
 
+int report_count = 0;
+int xpos = 0;
+int ypos = 0;
+int seq_index = 0;
 int duration_count = 0;
-int bufindex = 0;
 int portsval = 0;
-int swap_slot_number = 0;
 
-inline void do_steps(const command_t* steps, uint16_t steps_size, USB_JoystickReport_Input_t* const ReportData, State_t nextState, int add_swap_slot_number) {
-	take_action(steps[bufindex].action, ReportData);
+inline void execute_step_sequence(USB_JoystickReport_Input_t* const ReportData, const command_t* step_sequence, uint16_t sequence_size, State_t next_state) {
+	take_action(step_sequence[seq_index].action, ReportData);
 	duration_count ++;
-	
-	if (duration_count > steps[bufindex].duration)
+
+	if (duration_count > step_sequence[seq_index].duration)
 	{
-		bufindex ++;
+		seq_index ++;
 		duration_count = 0;
 	}
 
-	if (bufindex > steps_size - 1) 
+	if (seq_index > sequence_size - 1)
 	{
-		bufindex = 0;
+		seq_index = 0;
 		duration_count = 0;
-		if (add_swap_slot_number) {
-			swap_slot_number = (swap_slot_number + 1) % 5;
-		}
-
-		state = nextState;
-		reset_report(ReportData);
+		current_state = next_state;
+		reset_data(ReportData);
 	}
 }
 
@@ -270,7 +269,7 @@ inline void do_steps(const command_t* steps, uint16_t steps_size, USB_JoystickRe
 void GetNextReport(USB_JoystickReport_Input_t* const ReportData) {
 
 	// Prepare an empty report
-	reset_report(ReportData);
+	reset_data(ReportData);
 
 	// Repeat ECHOES times the last report
 	if (echoes > 0)
@@ -281,170 +280,35 @@ void GetNextReport(USB_JoystickReport_Input_t* const ReportData) {
 	}
 
 	// States and moves management
-	switch (state)
+	switch (current_state)
 	{
 		case SYNC_CONTROLLER:
-			bufindex = 0;
-			state = BREATHE;
+			seq_index = 0;
+			current_state = BREATHE;
 			break;
-		
+
 		case BREATHE:
-			do_steps(wake_up_hang, ARRAY_SIZE(wake_up_hang), ReportData, FLY_TO_NURSERY, 0);
+			execute_step_sequence(ReportData, wait, ARRAY_SIZE(wait), PROCESS);
+			current_state = PROCESS;
 			break;
 
-		case FLY_TO_NURSERY:
-			do_steps(fly_to_breading_steps, ARRAY_SIZE(fly_to_breading_steps), ReportData, APPROACH_NPC, 0);
-			// take_action(fly_to_breading_steps[bufindex], ReportData);
-			// duration_count ++;
-			
-			// if (duration_count > fly_to_breading_steps[bufindex].duration)
-			// {
-			// 	bufindex ++;
-			// 	duration_count = 0;
-			// }
-
-			// if (bufindex > (int)(sizeof(fly_to_breading_steps) / sizeof(fly_to_breading_steps[0])) - 1) 
-			// {
-			// 	bufindex = 0;
-			// 	duration_count = 0;
-
-			// 	state = APPROACH_NPC;
-
-			// 	reset_report(ReportData);
-			// }
+		case PROCESS:
+			execute_step_sequence(ReportData, remove_friend, ARRAY_SIZE(remove_friend), REPEAT);
 			break;
 
-		case APPROACH_NPC:
-			do_steps(get_egg_steps, ARRAY_SIZE(get_egg_steps), ReportData, PICK_SWAP_SLOT, 0);
-			// take_action(get_egg_steps[bufindex], ReportData);
-			// duration_count ++;
-			
-			// if (duration_count > get_egg_steps[bufindex].duration)
-			// {
-			// 	bufindex ++;
-			// 	duration_count = 0;
-			// }
-
-			// if (bufindex > (int)(sizeof(get_egg_steps) / sizeof(get_egg_steps[0])) - 1) 
-			// {
-			// 	bufindex = 0;
-			// 	duration_count = 0;
-
-			// 	state = PICK_SWAP_SLOT;
-
-			// 	reset_report(ReportData);
-			// }
-		
-			break;
-	
-		case PICK_SWAP_SLOT:
-			// do_steps(swap_slot[swap_slot_number], swap_slot_size[swap_slot_number], ReportData, SWAP_POKEMON, 1);
-			take_action(swap_slot[swap_slot_number][bufindex].action, ReportData);
-			duration_count ++;
-			
-			if (duration_count > swap_slot[swap_slot_number][bufindex].duration)
-			{
-				bufindex ++;
-				duration_count = 0;
-			}
-
-			if (bufindex > swap_slot_size[swap_slot_number] - 1) 
-			{
-				bufindex = 0;
-				duration_count = 0;
-				swap_slot_number = (swap_slot_number + 1) % 5;
-
-				state = SWAP_POKEMON;
-
-				reset_report(ReportData);
-			}
+		case REPEAT:
+			current_state = SYNC_CONTROLLER;
 			break;
 
-			// take_action(swap_slot_3[bufindex], ReportData);
-			// duration_count ++;
-			
-			// if (duration_count > swap_slot_3[bufindex].duration)
-			// {
-			// 	bufindex ++;
-			// 	duration_count = 0;
-			// }
-
-			// if (bufindex > (int)(sizeof(swap_slot_3) / 
-			//                      sizeof(swap_slot_3[0])) - 1) 
-			// {
-			// 	bufindex = 0;
-			// 	duration_count = 0;
-			// 	swap_slot_number = (swap_slot_number + 1) % 5;
-
-			// 	state = SWAP_POKEMON;
-			// }
-			// break;
-
-		case SWAP_POKEMON:
-			do_steps(swap_pokemon_steps, ARRAY_SIZE(swap_pokemon_steps), ReportData, BREEDING_PREP, 0);
-			// take_action(swap_pokemon_steps[bufindex], ReportData);
-			// duration_count ++;
-
-			// if (duration_count > swap_pokemon_steps[bufindex].duration)
-			// {
-			// 	bufindex ++;
-			// 	duration_count = 0;
-			// }
-
-			// if (bufindex > (int)(sizeof(swap_pokemon_steps) / sizeof(swap_pokemon_steps[0])) - 1) 
-			// {
-			// 	bufindex = 0;
-			// 	duration_count = 0;
-
-			// 	state = BREEDING_PREP;
-
-			// 	reset_report(ReportData);
-			// }
-			break;
-
-		case BREEDING_PREP:
-			do_steps(breeding_prep_steps, ARRAY_SIZE(breeding_prep_steps), ReportData, BREEDING, 0);
-			break;
-
-		case BREEDING:
-			take_action(circle_around, ReportData);
-			duration_count ++;
-			
-			if (duration_count % 100 >= 0 && duration_count % 100 <= 5) {
-				take_action(press_a, ReportData);
-			}
-			
-			if (duration_count > breeding_duration - 1) {
-				duration_count = 0;
-				bufindex = 0;
-
-				state = NEXT_ROUND;
-			}
-			break;
-
-		case NEXT_ROUND:
-			do_steps(next_round_steps, ARRAY_SIZE(next_round_steps), ReportData, FLY_TO_NURSERY, 0);
+		case CLEANUP:
+			current_state = DONE;
 			break;
 
 		case DONE:
-			#ifdef ALERT_WHEN_DONE
-			portsval = ~portsval;
-			PORTD = portsval; //flash LED(s) and sound buzzer if attached
-			PORTB = portsval;
-			_delay_ms(250);
-			#endif
 			return;
 	}
-
-	// // Inking
-	// if (state != SYNC_CONTROLLER && state != SYNC_POSITION)
-	// 	if (pgm_read_byte(&(image_data[(xpos / 8) + (ypos * 40)])) & 1 << (xpos % 8))
-	// 		ReportData->Button |= SWITCH_A;
 
 	// Prepare to echo this report
 	memcpy(&last_report, ReportData, sizeof(USB_JoystickReport_Input_t));
 	echoes = ECHOES;
-
 }
-
-
